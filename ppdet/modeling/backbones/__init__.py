@@ -21,6 +21,7 @@ from . import mobilenet
 from . import mobilenet_v3
 from . import senet
 from . import fpn
+from . import fpn_lite
 from . import vgg
 from . import blazenet
 from . import faceboxnet
@@ -33,6 +34,7 @@ from . import hourglass
 from . import efficientnet
 from . import bifpn
 from . import cspdarknet
+from . import shufflenet_v2
 
 from .resnet import *
 from .resnext import *
@@ -41,6 +43,7 @@ from .mobilenet import *
 from .mobilenet_v3 import *
 from .senet import *
 from .fpn import *
+from .fpn_lite import *
 from .vgg import *
 from .blazenet import *
 from .faceboxnet import *
@@ -53,3 +56,4 @@ from .hourglass import *
 from .efficientnet import *
 from .bifpn import *
 from .cspdarknet import *
+from .shufflenet_v2 import *
