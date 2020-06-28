@@ -21,6 +21,8 @@ from . import fcos_head
 from . import fcos_lite_head
 from . import corner_head
 from . import efficient_head
+from . import ttf_head
+from . import ttflite_head
 
 from .rpn_head import *
 from .yolo_head import *
@@ -29,3 +31,5 @@ from .fcos_head import *
 from .fcos_lite_head import *
 from .corner_head import *
 from .efficient_head import *
+from .ttf_head import *
+from .ttflite_head import *

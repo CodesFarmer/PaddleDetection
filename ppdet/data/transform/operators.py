@@ -146,6 +146,102 @@ class DecodeImage(BaseOperator):
 
 
 @register_op
+class KeepRatio(BaseOperator):
+    def __init__(self, aspect_ratio=1, training=False):
+        """ Transform the image data to numpy format.
+
+        Args:
+            to_rgb (bool): whether to convert BGR to RGB
+            with_mixup (bool): whether or not to mixup image and gt_bbbox/gt_score
+        """
+
+        super(KeepRatio, self).__init__()
+        self.aspect_ratio = aspect_ratio
+        self.training = training
+        if not isinstance(self.aspect_ratio, list):
+            raise TypeError("{}: input type is invalid.".format(self))
+        if not isinstance(self.training, bool):
+            raise TypeError("{}: input type is invalid.".format(self))
+
+    def __call__(self, sample):
+        """ load image if 'im_file' field is not empty but 'image' is"""
+        im = sample['image']
+        height = sample['h']
+        width = sample['w']
+        cur_ratio = width / height
+        if abs(cur_ratio - self.aspect_ratio) > 0.01:
+            if self.training:
+                gt_bbox = sample['gt_bbox']
+                min_x = width - 1
+                min_y = height - 1
+                max_x = 0
+                max_y = 0
+                for bbox in range(gt_bbox):
+                    x1 = bbox[0]
+                    y1 = bbox[1]
+                    x2 = bbox[2] 
+                    y2 = bbox[3] 
+                    min_x = max(min(min_x, x1), 1)
+                    min_y = max(min(min_y, y1), 1)
+                    max_x = min(max(max_x, x2), width - 1)
+                    max_y = min(max(max_y, y2), height - 1)
+                rwi = max_x - min_x
+                rhi = max_y - min_y
+                rcx = (min_x + max_x) / 2
+                rcy = (min_y + max_y) / 2
+                min_edge = min(width, height)
+                dwi = 0
+                dhi = 0
+                left = 0
+                top = 0
+                right = width - 1
+                bottom = height - 1
+                if cur_ratio < self.aspect_ratio:
+                    dwi = width
+                    dhi = int(dwi / self.aspect_ratio)
+                    if dhi <= rhi:
+                        dhi = rhi + 20
+                        dwi = int(dhi * self.aspect_ratio)
+                    left = 0
+                    right = min(width - 1, dwi - 1)
+                    top = np.random.randint(max(0, max_y - dhi), min_y)
+                    bottom = min(top + dhi, height - 1)
+                else:
+                    dhi = height
+                    dwi = int(dhi * self.aspect_ratio)
+                    if dwi <= rwi:
+                        dwi = rwi + 20
+                        dhi = int(dwi / self.aspect_ratio)
+                    top = 0
+                    bottom = min(height - 1, dhi - 1)
+                    left = np.random.randint(max(0, max_x - dwi), min_x)
+                    right = min(left + dwi, width - 1)
+                for i in range(len(gt_bbox)):
+                    gt_bbox[i, 0] = int(gt_bbox[i, 0]) - left
+                    gt_bbox[i, 1] = int(gt_bbox[i, 1]) - top
+                    gt_bbox[i, 2] = int(gt_bbox[i, 2]) - left
+                    gt_bbox[i, 3] = int(gt_bbox[i, 3]) - top
+                image_new = im[top:bottom, left:right, :].copy()
+                rhi, rwi = image_new.shape[:2]
+                if abs(rwi / rhi - self.aspect_ratio) > 0.01:
+                    if rwi / rhi < self.aspect_ratio:
+                        nwi = rwi
+                        nhi = int(rwi / self.aspect_ratio)
+                    else:
+                        nhi = rhi
+                        nwi = int(rhi * self.aspect_ratio)
+                    image_new = cv2.copyMakeBorder(image_new, 0, nhi-rh, 0, nwi-rw,
+                                                 cv2.BORDER_CONSTANT, value=(128, 128, 128))
+                sample['im_info'] = np.array(
+                    [im.shape[0], im.shape[1], 1.], dtype=np.float32)
+                sample['image'] = image_new
+                sample['gt_bbox'] = gt_bbox
+                sample['h'] = image_new.shape[0]
+                sample['w'] = image_new.shape[1]
+        return sample
+
+
+@register_op
 class MultiscaleTestResize(BaseOperator):
     def __init__(self,
                  origin_target_size=800,
@@ -1162,6 +1258,7 @@ class Resize(BaseOperator):
             scale_array = np.array([scale_x, scale_y] * 2, dtype=np.float32)
             sample['gt_bbox'] = np.clip(sample['gt_bbox'] * scale_array, 0,
                                         dim - 1)
+        sample['scale_factor'] = [scale_x, scale_y] * 2
         sample['h'] = resize_h
         sample['w'] = resize_w
 
@@ -1185,6 +1282,8 @@ class ColorDistort(BaseOperator):
             in [lower, upper, probability] format.
         random_apply (bool): whether to apply in random (yolo) or fixed (SSD)
             order.
+        hsv_format (bool): whether to convert color from BGR to HSV
+        random_channel (bool): whether to swap channels randomly
     """
 
     def __init__(self,
@@ -1192,13 +1291,17 @@ class ColorDistort(BaseOperator):
                  saturation=[0.5, 1.5, 0.5],
                  contrast=[0.5, 1.5, 0.5],
                  brightness=[0.5, 1.5, 0.5],
-                 random_apply=True):
+                 random_apply=True,
+                 hsv_format=False,
+                 random_channel=False):
         super(ColorDistort, self).__init__()
         self.hue = hue
         self.saturation = saturation
         self.contrast = contrast
         self.brightness = brightness
         self.random_apply = random_apply
+        self.hsv_format = hsv_format
+        self.random_channel = random_channel
 
     def apply_hue(self, img):
         low, high, prob = self.hue
@@ -1206,6 +1309,11 @@ class ColorDistort(BaseOperator):
             return img
 
         img = img.astype(np.float32)
+        if self.hsv_format:
+            img[..., 0] += random.uniform(low, high)
+            img[..., 0][img[..., 0] > 360] -= 360
+            img[..., 0][img[..., 0] < 0] += 360
+            return img
 
         # XXX works, but result differ from HSV version
         delta = np.random.uniform(low, high)
@@ -1225,8 +1333,10 @@ class ColorDistort(BaseOperator):
         if np.random.uniform(0., 1.) < prob:
             return img
         delta = np.random.uniform(low, high)
-
         img = img.astype(np.float32)
+        if self.hsv_format:
+            img[..., 1] *= delta
+            return img
         gray = img * np.array([[[0.299, 0.587, 0.114]]], dtype=np.float32)
         gray = gray.sum(axis=2, keepdims=True)
         gray *= (1.0 - delta)
@@ -1273,12 +1383,24 @@ class ColorDistort(BaseOperator):
 
         if np.random.randint(0, 2):
             img = self.apply_contrast(img)
+            if self.hsv_format:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
             img = self.apply_saturation(img)
             img = self.apply_hue(img)
+            if self.hsv_format:
+                img = cv2.cvtColor(img, cv2.COLOR_HSV2RGB)
         else:
+            if self.hsv_format:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
             img = self.apply_saturation(img)
             img = self.apply_hue(img)
+            if self.hsv_format:
+                img = cv2.cvtColor(img, cv2.COLOR_HSV2RGB)
             img = self.apply_contrast(img)
+
+        if self.random_channel:
+            if np.random.randint(0, 2):
+                img = img[..., np.random.permutation(3)]
         sample['image'] = img
         return sample
 
@@ -1595,11 +1717,16 @@ class RandomCrop(BaseOperator):
             found = False
             for i in range(self.num_attempts):
                 scale = np.random.uniform(*self.scaling)
-                min_ar, max_ar = self.aspect_ratio
-                aspect_ratio = np.random.uniform(
-                    max(min_ar, scale**2), min(max_ar, scale**-2))
-                crop_h = int(h * scale / np.sqrt(aspect_ratio))
-                crop_w = int(w * scale * np.sqrt(aspect_ratio))
+                if self.aspect_ratio is not None:
+                    min_ar, max_ar = self.aspect_ratio
+                    aspect_ratio = np.random.uniform(
+                        max(min_ar, scale**2), min(max_ar, scale**-2))
+                    h_scale = scale / np.sqrt(aspect_ratio)
+                    w_scale = scale * np.sqrt(aspect_ratio)
+                else:
+                    h_scale = w_scale = scale
+                crop_h = int(h * h_scale)
+                crop_w = int(w * w_scale)
                 crop_y = np.random.randint(0, h - crop_h)
                 crop_x = np.random.randint(0, w - crop_w)
                 crop_box = [crop_x, crop_y, crop_x + crop_w, crop_y + crop_h]
@@ -2184,3 +2311,100 @@ class TargetAssign(BaseOperator):
         targets[matched_indices] = matched_targets
         sample['fg_num'] = np.array(len(matched_targets), dtype=np.int32)
         return sample
+
+
+@register_op
+class TTFTarget(BaseOperator):
+    """
+    TTFTarget
+    """
+
+    def __init__(self, output_size, num_classes, down_ratio=4, alpha=0.54):
+        super(TTFTarget, self).__init__()
+        self.down_ratio = down_ratio
+        self.output_size = output_size
+        self.num_classes = num_classes
+        self.alpha = alpha
+
+    def __call__(self, sample, context=None):
+        feat_size = self.output_size // self.down_ratio
+        heatmap = np.zeros(
+            (self.num_classes, feat_size, feat_size), dtype='float32')
+        box_target = np.ones((4, feat_size, feat_size), dtype='float32') * -1
+        reg_weight = np.zeros((1, feat_size, feat_size), dtype='float32')
+
+        gt_bbox = sample['gt_bbox']
+        gt_class = sample['gt_class']
+
+        bbox_w = gt_bbox[:, 2] - gt_bbox[:, 0] + 1
+        bbox_h = gt_bbox[:, 3] - gt_bbox[:, 1] + 1
+        area = bbox_w * bbox_h
+        boxes_areas_log = np.log(area)
+        boxes_ind = np.argsort(boxes_areas_log, axis=0)[::-1]
+        boxes_area_topk_log = boxes_areas_log[boxes_ind]
+        gt_bbox = gt_bbox[boxes_ind]
+        gt_class = gt_class[boxes_ind]
+
+        feat_gt_bbox = gt_bbox / self.down_ratio
+        feat_gt_bbox = np.clip(feat_gt_bbox, 0, feat_size - 1)
+        feat_hs, feat_ws = (feat_gt_bbox[:, 3] - feat_gt_bbox[:, 1],
+                            feat_gt_bbox[:, 2] - feat_gt_bbox[:, 0])
+
+        ct_inds = np.stack(
+            [(gt_bbox[:, 0] + gt_bbox[:, 2]) / 2,
+             (gt_bbox[:, 1] + gt_bbox[:, 3]) / 2],
+            axis=1) / self.down_ratio
+
+        h_radiuses_alpha = (feat_hs / 2. * self.alpha).astype('int32')
+        w_radiuses_alpha = (feat_ws / 2. * self.alpha).astype('int32')
+
+        for k in range(len(gt_bbox)):
+            cls_id = gt_class[k]
+            fake_heatmap = np.zeros((feat_size, feat_size), dtype='float32')
+            self.draw_truncate_gaussian(fake_heatmap, ct_inds[k],
+                                        h_radiuses_alpha[k],
+                                        w_radiuses_alpha[k])
+
+            heatmap[cls_id] = np.maximum(heatmap[cls_id], fake_heatmap)
+            box_target_inds = fake_heatmap > 0
+            box_target[:, box_target_inds] = gt_bbox[k][:, None]
+
+            local_heatmap = fake_heatmap[box_target_inds]
+            ct_div = np.sum(local_heatmap)
+            local_heatmap *= boxes_area_topk_log[k]
+            reg_weight[0, box_target_inds] = local_heatmap / ct_div
+
+        sample['ttf_heatmap'] = heatmap
+        sample['ttf_box_target'] = box_target
+        sample['ttf_reg_weight'] = reg_weight
+        return sample
+
+    def draw_truncate_gaussian(self, heatmap, center, h_radius, w_radius):
+        h, w = 2 * h_radius + 1, 2 * w_radius + 1
+        sigma_x = w / 6
+        sigma_y = h / 6
+        gaussian = self.gaussian_2d((h, w), sigma_x, sigma_y)
+
+        x, y = int(center[0]), int(center[1])
+
+        height, width = heatmap.shape[0:2]
+
+        left, right = min(x, w_radius), min(width - x, w_radius + 1)
+        top, bottom = min(y, h_radius), min(height - y, h_radius + 1)
+
+        masked_heatmap = heatmap[y - top:y + bottom, x - left:x + right]
+        masked_gaussian = gaussian[h_radius - top:h_radius + bottom, w_radius -
+                                   left:w_radius + right]
+        if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
+            heatmap[y - top:y + bottom, x - left:x + right] = np.maximum(
+                masked_heatmap, masked_gaussian)
+        return heatmap
+
+    def gaussian_2d(self, shape, sigma_x, sigma_y):
+        m, n = [(s - 1.) / 2. for s in shape]
+        y, x = np.ogrid[-m:m + 1, -n:n + 1]
+
+        h = np.exp(-(x * x / (2 * sigma_x * sigma_x) + y * y / (2 * sigma_y *
+                                                                sigma_y)))
+        h[h < np.finfo(h.dtype).eps * h.max()] = 0
+        return h

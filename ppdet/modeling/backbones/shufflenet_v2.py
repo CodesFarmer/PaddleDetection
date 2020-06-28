@@ -64,8 +64,8 @@ class ShuffleNetV2():
         else:
             raise NotImplementedError("This scale size:[" + str(scale) +
                                       "] is not implemented!")
+        res_endpoints = []
         #conv1
-
         input_channel = stage_out_channels[1]
         conv1 = self.conv_bn_layer(
             input=input,
@@ -74,6 +74,8 @@ class ShuffleNetV2():
             padding=1,
             stride=2,
             name='stage1_conv')
+        if 1 in self.feature_maps:
+            res_endpoints.append(conv1)
         pool1 = fluid.layers.pool2d(
             input=conv1,
             pool_size=3,
@@ -82,7 +84,6 @@ class ShuffleNetV2():
             pool_type='max')
         conv = pool1
         # bottleneck sequences
-        res_endpoints = []
         if 2 in self.feature_maps:
             res_endpoints.append(conv)
         for idxstage in range(len(stage_repeats)):
