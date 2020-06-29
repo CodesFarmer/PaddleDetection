@@ -158,12 +158,12 @@ class KeepRatio(BaseOperator):
         super(KeepRatio, self).__init__()
         self.aspect_ratio = aspect_ratio
         self.training = training
-        if not isinstance(self.aspect_ratio, list):
-            raise TypeError("{}: input type is invalid.".format(self))
+        if not isinstance(self.aspect_ratio, float):
+            raise TypeError("{}: input type is invalid.".format(self.aspect_ratio))
         if not isinstance(self.training, bool):
-            raise TypeError("{}: input type is invalid.".format(self))
+            raise TypeError("{}: input type is invalid.".format(self.training))
 
-    def __call__(self, sample):
+    def __call__(self, sample, context=None):
         """ load image if 'im_file' field is not empty but 'image' is"""
         im = sample['image']
         height = sample['h']
@@ -176,11 +176,11 @@ class KeepRatio(BaseOperator):
                 min_y = height - 1
                 max_x = 0
                 max_y = 0
-                for bbox in range(gt_bbox):
+                for bbox in gt_bbox:
                     x1 = bbox[0]
                     y1 = bbox[1]
-                    x2 = bbox[2] 
-                    y2 = bbox[3] 
+                    x2 = bbox[2]
+                    y2 = bbox[3]
                     min_x = max(min(min_x, x1), 1)
                     min_y = max(min(min_y, y1), 1)
                     max_x = min(max(max_x, x2), width - 1)
@@ -221,16 +221,20 @@ class KeepRatio(BaseOperator):
                     gt_bbox[i, 1] = int(gt_bbox[i, 1]) - top
                     gt_bbox[i, 2] = int(gt_bbox[i, 2]) - left
                     gt_bbox[i, 3] = int(gt_bbox[i, 3]) - top
+                top = int(top)
+                bottom = int(bottom)
+                left = int(left)
+                right = int(right)
                 image_new = im[top:bottom, left:right, :].copy()
                 rhi, rwi = image_new.shape[:2]
                 if abs(rwi / rhi - self.aspect_ratio) > 0.01:
-                    if rwi / rhi < self.aspect_ratio:
+                    if rwi / rhi > self.aspect_ratio:
                         nwi = rwi
                         nhi = int(rwi / self.aspect_ratio)
                     else:
                         nhi = rhi
                         nwi = int(rhi * self.aspect_ratio)
-                    image_new = cv2.copyMakeBorder(image_new, 0, nhi-rh, 0, nwi-rw,
+                    image_new = cv2.copyMakeBorder(image_new, 0, nhi-rhi, 0, nwi-rwi,
                                                  cv2.BORDER_CONSTANT, value=(128, 128, 128))
                 sample['im_info'] = np.array(
                     [im.shape[0], im.shape[1], 1.], dtype=np.float32)

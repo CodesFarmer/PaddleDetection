@@ -107,6 +107,8 @@ class ShuffleNetV2():
             if idxstage + 3 in self.feature_maps:
                 res_endpoints.append(conv)
 
+        for feat in res_endpoints:
+            print("XXXXXXXXDEBUG ", feat.shape)
         return OrderedDict([('sfnv2_{}'.format(self.feature_maps[idx]), feat)
                                         for idx, feat in enumerate(res_endpoints)])
 
