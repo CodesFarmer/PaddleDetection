@@ -246,6 +246,53 @@ class KeepRatio(BaseOperator):
 
 
 @register_op
+class Rotation(BaseOperator):
+    """
+    Rotate the image with bounding box
+    """
+    def __init__(self, degree=20, border_value=[0, 0, 0]):
+        self._degree = degree
+        self._border_value = border_value
+
+    def __call__(self, sample, context=None):
+        im = sample['image']
+        height = sample['h']
+        width = sample['w']
+        cx, cy = width // 2, height // 2
+        angle = np.random.randint(0, self._degree * 2) - self._degree
+        rot_mat = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        image_rotated = cv2.warpAffine(
+                src=im,
+                M=rot_mat,
+                dsize=im.shape[1::-1],
+                flags=cv2.INTER_AREA,
+                borderValue=self._border_value)
+        gt_bbox = sample['gt_bbox']
+        for i, bbox in enumerate(gt_bbox):
+            x1, y1, x2, y2 = bbox
+            coor = [[x1, x2, x1, x2], [y1, y1, y2, y2], [1, 1, 1, 1]]
+            coor_new = np.matmul(rot_mat, coor)
+            xmin = np.min(coor_new[0, :])
+            ymin = np.min(coor_new[1, :])
+            xmax = np.max(coor_new[0, :])
+            ymax = np.max(coor_new[1, :])
+            region_scale = np.sqrt((xmax - xmin)*(ymax - ymin))
+            if region_scale > 50:
+                margin = 1.8
+                xmin = np.min(coor_new[0, :]) + np.abs(angle/margin)
+                ymin = np.min(coor_new[1, :]) + np.abs(angle/margin)
+                xmax = np.max(coor_new[0, :]) - np.abs(angle/margin)
+                ymax = np.max(coor_new[1, :]) - np.abs(angle/margin)
+            gt_bbox[i, 0] = xmin
+            gt_bbox[i, 1] = ymin
+            gt_bbox[i, 2] = xmax
+            gt_bbox[i, 3] = ymax
+        sample['gt_bbox'] = gt_bbox
+        sample['image'] = image_rotated.copy()
+        return sample
+
+
+@register_op
 class MultiscaleTestResize(BaseOperator):
     def __init__(self,
                  origin_target_size=800,
