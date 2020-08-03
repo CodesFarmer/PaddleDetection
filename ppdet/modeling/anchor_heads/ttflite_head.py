@@ -168,7 +168,7 @@ class TTFLiteHead(object):
                     name=param_name)
         return x
 
-    def upsample(self, x, out_c, name=None):
+    def upsample(self, x, out_c, out_shape, act_shape=None, name=None):
         fan_in = x.shape[1] * 3 * 3
         stdv = 1. / math.sqrt(fan_in)
         x = self.depthwise_separable(
@@ -180,7 +180,7 @@ class TTFLiteHead(object):
                 scale=1,
                 name=name)
         up = fluid.layers.resize_bilinear(
-            x, scale=2, name=name + '.2.upsample')
+            x, out_shape=out_shape, actual_shape=act_shape, name=name + '.2.upsample')
         return up
 
     def _head(self, x, out_c, conv_num=1, head_out_c=None, name=None):
@@ -226,8 +226,13 @@ class TTFLiteHead(object):
     def get_output(self, input, name=None):
         feat = input[-1]
         for i, out_c in enumerate(self.planes):
+            act_shape = None
+            out_shape = input[-i - 2].shape[2:]
+            if i < self.shortcut_len:
+                act_shape = fluid.layers.shape(input[-i - 2])
+                act_shape = act_shape[2:]
             feat = self.upsample(
-                feat, out_c, name=name + '.conv_layers.' + str(i))
+                feat, out_c, out_shape=out_shape, act_shape=act_shape, name=name + '.conv_layers.' + str(i))
             if i < self.shortcut_len:
                 shortcut = self.shortcut(
                     input[-i - 2],
