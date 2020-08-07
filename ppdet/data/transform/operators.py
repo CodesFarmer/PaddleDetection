@@ -160,6 +160,153 @@ class DecodeImage(BaseOperator):
 
 
 @register_op
+class KeepRatio(BaseOperator):
+    def __init__(self, aspect_ratio=1, training=False):
+        """ Transform the image data to numpy format.
+
+        Args:
+            to_rgb (bool): whether to convert BGR to RGB
+            with_mixup (bool): whether or not to mixup image and gt_bbbox/gt_score
+        """
+
+        super(KeepRatio, self).__init__()
+        self.aspect_ratio = aspect_ratio
+        self.training = training
+        if not isinstance(self.aspect_ratio, float):
+            raise TypeError("{}: input type is invalid.".format(self.aspect_ratio))
+        if not isinstance(self.training, bool):
+            raise TypeError("{}: input type is invalid.".format(self.training))
+
+    def __call__(self, sample, context=None):
+        """ load image if 'im_file' field is not empty but 'image' is"""
+        im = sample['image']
+        height = sample['h']
+        width = sample['w']
+        cur_ratio = width / height
+        if abs(cur_ratio - self.aspect_ratio) > 0.01:
+            if self.training:
+                gt_bbox = sample['gt_bbox']
+                min_x = width - 1
+                min_y = height - 1
+                max_x = 0
+                max_y = 0
+                for bbox in gt_bbox:
+                    x1 = bbox[0]
+                    y1 = bbox[1]
+                    x2 = bbox[2]
+                    y2 = bbox[3]
+                    min_x = max(min(min_x, x1), 1)
+                    min_y = max(min(min_y, y1), 1)
+                    max_x = min(max(max_x, x2), width - 1)
+                    max_y = min(max(max_y, y2), height - 1)
+                rwi = max_x - min_x
+                rhi = max_y - min_y
+                rcx = (min_x + max_x) / 2
+                rcy = (min_y + max_y) / 2
+                min_edge = min(width, height)
+                dwi = 0
+                dhi = 0
+                left = 0
+                top = 0
+                right = width - 1
+                bottom = height - 1
+                if cur_ratio < self.aspect_ratio:
+                    dwi = width
+                    dhi = int(dwi / self.aspect_ratio)
+                    if dhi <= rhi:
+                        dhi = rhi + 20
+                        dwi = int(dhi * self.aspect_ratio)
+                    left = 0
+                    right = min(width - 1, dwi - 1)
+                    top = np.random.randint(max(0, max_y - dhi), min_y)
+                    bottom = min(top + dhi, height - 1)
+                else:
+                    dhi = height
+                    dwi = int(dhi * self.aspect_ratio)
+                    if dwi <= rwi:
+                        dwi = rwi + 20
+                        dhi = int(dwi / self.aspect_ratio)
+                    top = 0
+                    bottom = min(height - 1, dhi - 1)
+                    left = np.random.randint(max(0, max_x - dwi), min_x)
+                    right = min(left + dwi, width - 1)
+                for i in range(len(gt_bbox)):
+                    gt_bbox[i, 0] = int(gt_bbox[i, 0]) - left
+                    gt_bbox[i, 1] = int(gt_bbox[i, 1]) - top
+                    gt_bbox[i, 2] = int(gt_bbox[i, 2]) - left
+                    gt_bbox[i, 3] = int(gt_bbox[i, 3]) - top
+                top = int(top)
+                bottom = int(bottom)
+                left = int(left)
+                right = int(right)
+                image_new = im[top:bottom, left:right, :].copy()
+                rhi, rwi = image_new.shape[:2]
+                if abs(rwi / rhi - self.aspect_ratio) > 0.01:
+                    if rwi / rhi > self.aspect_ratio:
+                        nwi = rwi
+                        nhi = int(rwi / self.aspect_ratio)
+                    else:
+                        nhi = rhi
+                        nwi = int(rhi * self.aspect_ratio)
+                    image_new = cv2.copyMakeBorder(image_new, 0, nhi-rhi, 0, nwi-rwi,
+                                                 cv2.BORDER_CONSTANT, value=(128, 128, 128))
+                sample['im_info'] = np.array(
+                    [im.shape[0], im.shape[1], 1.], dtype=np.float32)
+                sample['image'] = image_new
+                sample['gt_bbox'] = gt_bbox
+                sample['h'] = image_new.shape[0]
+                sample['w'] = image_new.shape[1]
+        return sample
+
+
+@register_op
+class Rotation(BaseOperator):
+    """
+    Rotate the image with bounding box
+    """
+    def __init__(self, degree=20, border_value=[0, 0, 0]):
+        self._degree = degree
+        self._border_value = border_value
+
+    def __call__(self, sample, context=None):
+        im = sample['image']
+        height = sample['h']
+        width = sample['w']
+        cx, cy = width // 2, height // 2
+        angle = np.random.randint(0, self._degree * 2) - self._degree
+        rot_mat = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        image_rotated = cv2.warpAffine(
+                src=im,
+                M=rot_mat,
+                dsize=im.shape[1::-1],
+                flags=cv2.INTER_AREA,
+                borderValue=self._border_value)
+        gt_bbox = sample['gt_bbox']
+        for i, bbox in enumerate(gt_bbox):
+            x1, y1, x2, y2 = bbox
+            coor = [[x1, x2, x1, x2], [y1, y1, y2, y2], [1, 1, 1, 1]]
+            coor_new = np.matmul(rot_mat, coor)
+            xmin = np.min(coor_new[0, :])
+            ymin = np.min(coor_new[1, :])
+            xmax = np.max(coor_new[0, :])
+            ymax = np.max(coor_new[1, :])
+            region_scale = np.sqrt((xmax - xmin)*(ymax - ymin))
+            if region_scale > 50:
+                margin = 1.8
+                xmin = np.min(coor_new[0, :]) + np.abs(angle/margin)
+                ymin = np.min(coor_new[1, :]) + np.abs(angle/margin)
+                xmax = np.max(coor_new[0, :]) - np.abs(angle/margin)
+                ymax = np.max(coor_new[1, :]) - np.abs(angle/margin)
+            gt_bbox[i, 0] = xmin
+            gt_bbox[i, 1] = ymin
+            gt_bbox[i, 2] = xmax
+            gt_bbox[i, 3] = ymax
+        sample['gt_bbox'] = gt_bbox
+        sample['image'] = image_rotated.copy()
+        return sample
+
+
+@register_op
 class MultiscaleTestResize(BaseOperator):
     def __init__(self,
                  origin_target_size=800,

@@ -68,9 +68,6 @@ class MobileNetV3(object):
         if isinstance(feature_maps, Integral):
             feature_maps = [feature_maps]
 
-        if norm_type == 'sync_bn' and freeze_norm:
-            raise ValueError(
-                "The norm_type should not be sync_bn when freeze_norm is True")
         self.scale = scale
         self.model_name = model_name
         self.feature_maps = feature_maps
@@ -440,15 +437,16 @@ class MobileNetV3(object):
 
 @register
 class MobileNetV3RCNN(MobileNetV3):
-    def __init__(self,
-                 scale=1.0,
-                 model_name='large',
-                 conv_decay=0.0,
-                 norm_type='bn',
-                 norm_decay=0.0,
-                 freeze_norm=True,
-                 feature_maps=[2, 3, 4, 5],
-                 lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0]):
+    def __init__(
+            self,
+            scale=1.0,
+            model_name='large',
+            conv_decay=0.0,
+            norm_type='bn',
+            norm_decay=0.0,
+            feature_maps=[2, 3, 4, 5],
+            lr_mult_list=[1.0, 1.0, 1.0, 1.0, 1.0],
+            freeze_norm=freeze_norm, ):
         super(MobileNetV3RCNN, self).__init__(
             scale=scale,
             model_name=model_name,
@@ -456,8 +454,8 @@ class MobileNetV3RCNN(MobileNetV3):
             norm_type=norm_type,
             norm_decay=norm_decay,
             lr_mult_list=lr_mult_list,
-            feature_maps=feature_maps,
-            freeze_norm=freeze_norm)
+            freeze_norm=freeze_norm,
+            feature_maps=feature_maps)
         self.curr_stage = 0
         self.block_stride = 1
 
@@ -534,19 +532,31 @@ class MobileNetV3RCNN(MobileNetV3):
         inplanes = self._make_divisible(inplanes * scale)
         for layer_cfg in cfg:
             self.block_stride *= layer_cfg[5]
-            conv = self._residual_unit(
-                input=conv,
-                num_in_filter=inplanes,
-                num_mid_filter=self._make_divisible(scale * layer_cfg[1]),
-                num_out_filter=self._make_divisible(scale * layer_cfg[2]),
-                act=layer_cfg[4],
-                stride=layer_cfg[5],
-                filter_size=layer_cfg[0],
-                use_se=layer_cfg[3],
-                name='conv' + str(i + 2))
-            inplanes = self._make_divisible(scale * layer_cfg[2])
-            i += 1
-            self.curr_stage += 1
+            if self.block_stride == 16 and layer_cfg[5] == 2:
+                self.end_points.append(conv)
+                conv = fluid.layers.pool2d(
+                        input=conv,
+                        pool_size=3,
+                        pool_type="max",
+                        pool_stride=2,
+                        pool_padding=1,
+                        name="conv_c4toc5")
+                self.end_points.append(conv)
+                break
+            else:
+                conv = self._residual_unit(
+                    input=conv,
+                    num_in_filter=inplanes,
+                    num_mid_filter=self._make_divisible(scale * layer_cfg[1]),
+                    num_out_filter=self._make_divisible(scale * layer_cfg[2]),
+                    act=layer_cfg[4],
+                    stride=layer_cfg[5],
+                    filter_size=layer_cfg[0],
+                    use_se=layer_cfg[3],
+                    name='conv' + str(i + 2))
+                inplanes = self._make_divisible(scale * layer_cfg[2])
+                i += 1
+                self.curr_stage += 1
 
         if np.max(self.feature_maps) >= 5:
             conv = self._conv_bn_layer(
